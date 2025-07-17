@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sms</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        #console-panel {
+            transition: transform 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+
+    <div id="app" class="flex h-screen relative overflow-hidden">
+
+        <div class="flex flex-grow h-screen">
+            <!-- Left Sidebar: Conversation List -->
+            <aside class="w-1/3 bg-white border-r border-gray-200 flex flex-col">
+                <header class="p-4 border-b border-gray-200">
+                    <div class="flex justify-between items-center mb-2">
+                        <h1 class="text-xl font-bold text-gray-800">Conversations</h1>
+                        <button id="show-console-btn" class="p-2 rounded-md hover:bg-gray-200" title="Show Console">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4" /></svg>
+                        </button>
+                    </div>
+                    <select id="phone-id-dropdown" class="w-full p-2 border border-gray-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <!-- js -->
+                    </select>
+                </header>
+                <div id="conversations-list" class="flex-grow overflow-y-auto">
+                    <p class="p-4 text-gray-500">Loading conversations...</p>
+                </div>
+            </aside>
+
+            <!-- Right Panel: Chat View -->
+            <main id="chat-view" class="w-2/3 flex flex-col bg-gray-50">
+
+                <div id="placeholder" class="flex flex-col items-center justify-center h-full text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                    <p class="text-lg font-medium">Select a conversation to start</p>
+                </div>
+
+                <div id="chat-content" class="hidden flex-grow flex flex-col overflow-hidden">
+                    <header class="p-4 border-b border-gray-200 bg-white flex justify-between items-center flex-shrink-0">
+                        <h2 id="chat-header" class="text-lg font-bold text-gray-800"></h2>
+                        <button id="ai-toggle-btn" class="px-4 py-2 rounded-md font-semibold transition-colors duration-200 text-sm">
+                            Toggle AI
+                        </button>
+                    </header>
+
+                    <div id="chat-messages" class="flex-grow p-4 overflow-y-auto">
+
+                    </div>
+
+                </div>
+            </main>
+        </div>
+
+        <!-- Console Panel -->
+        <div id="console-panel" class="absolute top-0 right-0 h-full w-1/3 bg-gray-800 text-white flex flex-col shadow-lg transform translate-x-full">
+            <header class="p-4 bg-gray-900 flex justify-between items-center">
+                <h2 class="font-bold">Console</h2>
+                <button id="hide-console-btn" class="p-1 rounded-md hover:bg-gray-700">&times;</button>
+            </header>
+            <div id="console-output" class="flex-grow p-2 font-mono text-sm overflow-y-auto"></div>
+        </div>
+
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'secret';
+        const SUPABASE_ANON_KEY = 'secret';
+
+        let supabaseClient;
+        if (SUPABASE_URL.includes('YOUR_SUPABASE_URL')) {
+            document.getElementById('conversations-list').innerHTML = '<p class="p-4 text-red-500 font-semibold">Please update your Supabase credentials in the HTML file.</p>';
+        } else {
+            supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        }
+
+        // state
+        let state = {
+            selectedPhoneId: 'all',
+            selectedSender: null,
+            conversations: {},
+            lastMessageDetails: {},
+            aiStatus: {} 
+        };
+
+        const phoneIdDropdown = document.getElementById('phone-id-dropdown');
+        const conversationsListEl = document.getElementById('conversations-list');
+        const placeholderEl = document.getElementById('placeholder');
+        const chatContentEl = document.getElementById('chat-content');
+        const chatHeaderEl = document.getElementById('chat-header');
+        const chatMessagesEl = document.getElementById('chat-messages');
+        const aiToggleButton = document.getElementById('ai-toggle-btn');
+        const showConsoleBtn = document.getElementById('show-console-btn');
+        const hideConsoleBtn = document.getElementById('hide-console-btn');
+        const consolePanel = document.getElementById('console-panel');
+        const consoleOutput = document.getElementById('console-output');
+
+
+        // console
+        function setupConsoleInterceptor() {
+            const originalLog = console.log;
+            const originalError = console.error;
+            console.log = function(...args) {
+                logToPanel(args, 'log');
+                originalLog.apply(console, args);
+            };
+            console.error = function(...args) {
+                logToPanel(args, 'error');
+                originalError.apply(console, args);
+            };
+        }
+
+        function logToPanel(args, type = 'log') {
+            const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg).join(' ');
+            const logEntry = document.createElement('div');
+            logEntry.className = `p-1 border-b border-gray-700 ${type === 'error' ? 'text-red-400' : 'text-gray-300'}`;
+            logEntry.textContent = `> ${message}`;
+            consoleOutput.appendChild(logEntry);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        }
+
+
+
+
+        // UI
+        function renderPhoneIdDropdown() {
+            const phoneIds = [...new Set(Object.values(state.lastMessageDetails).map(details => details.phoneid))];
+            phoneIdDropdown.innerHTML = `
+                <option value="all">All Phones</option>
+                ${phoneIds.map(id => `<option value="${id}">${id || 'Unknown Device'}</option>`).join('')}
+            `;
+            phoneIdDropdown.value = state.selectedPhoneId;
+        }
+
+        function renderConversationsList() {
+            const allSenders = Object.keys(state.conversations);
+            
+            const filteredSenders = allSenders.filter(sender => {
+                if (state.selectedPhoneId === 'all') return true;
+                return state.lastMessageDetails[sender]?.phoneid === state.selectedPhoneId;
+            });
+
+            if (filteredSenders.length === 0) {
+                conversationsListEl.innerHTML = '<p class="p-4 text-gray-500">No conversations to display.</p>';
+            } else {
+                conversationsListEl.innerHTML = filteredSenders.map(sender => `
+                    <div class="p-4 cursor-pointer hover:bg-gray-100 border-b border-gray-200 ${state.selectedSender === sender ? 'bg-blue-100 font-bold' : ''}" onclick="selectConversation('${sender}')">
+                        <p class="text-gray-800">${sender}</p>
+                        <p class="text-sm text-gray-500">From: ${state.lastMessageDetails[sender]?.phoneid || 'Unknown'}</p>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function renderMessages() {
+            if (!state.selectedSender) return;
+            const messages = state.conversations[state.selectedSender] || [];
+            chatMessagesEl.innerHTML = messages.map(msg => {
+                const isOutgoing = msg.isOutgoing;
+                return `
+                    <div class="flex my-2 ${isOutgoing ? 'justify-end' : 'justify-start'}">
+                        <div class="max-w-xs md:max-w-md lg:max-w-lg px-4 py-2 rounded-lg shadow-sm ${isOutgoing ? 'bg-blue-500 text-white' : 'bg-white text-gray-800'}">
+                            <p>${msg.content}</p>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+        }
+
+        function updateUiForAiState() {
+            if (!state.selectedSender) return;
+            const isAiActiveForSender = state.aiStatus[state.selectedSender];
+
+            if (isAiActiveForSender) {
+                aiToggleButton.textContent = 'Stop AI Response';
+                aiToggleButton.classList.remove('bg-green-500', 'hover:bg-green-600');
+                aiToggleButton.classList.add('bg-red-500', 'hover:bg-red-600', 'text-white');
+                manualReplyInput.disabled = true;
+                manualReplyBtn.disabled = true;
+                manualReplyInput.placeholder = 'Stop AI to send a manual reply';
+            } else {
+                aiToggleButton.textContent = 'Start AI Response';
+                aiToggleButton.classList.remove('bg-red-500', 'hover:bg-red-600');
+                aiToggleButton.classList.add('bg-green-500', 'hover:bg-green-600', 'text-white');
+                manualReplyInput.disabled = false;
+                manualReplyBtn.disabled = false;
+                manualReplyInput.placeholder = 'Type your manual reply...';
+            }
+        }
+
+        async function selectConversation(sender) {
+            state.selectedSender = sender;
+            chatHeaderEl.textContent = `Chat with ${sender}`;
+            
+            placeholderEl.classList.add('hidden');
+            chatContentEl.classList.remove('hidden');
+            chatContentEl.classList.add('flex');
+
+            renderConversationsList();
+            renderMessages();
+            updateUiForAiState();
+        }
+
+        async function fetchInitialData() {
+            if (!supabaseClient) return;
+            console.log('Fetching initial data from Supabase...');
+
+            try {
+                // The .order() call is removed as 'created_at' does not exist in your table.
+                const { data: convos, error: convosError } = await supabaseClient
+                    .from('conversations')
+                    .select('*');
+
+                if (convosError) {
+                    console.error("Error fetching conversations:", convosError);
+                    conversationsListEl.innerHTML = `<p class="p-4 text-red-500 font-semibold">Error: ${convosError.message}</p>`;
+                    return;
+                }
+                console.log('Fetched conversations:', convos?.length || 0);
+
+                const { data: statuses, error: statusesError } = await supabaseClient
+                    .from('ai_status')
+                    .select('*');
+                
+                if (statusesError) {
+                    console.error("Error fetching AI statuses:", statusesError);
+                } else {
+                     console.log('Fetched AI statuses:', statuses ? statuses.length : 0);
+                }
+
+                const aiStatusMap = {};
+                if (statuses) {
+                    for (const status of statuses) {
+                        aiStatusMap[status.phone_number] = status.is_active;
+                    }
+                }
+
+                state.conversations = {};
+                state.lastMessageDetails = {};
+                state.aiStatus = {};
+                
+                if (convos) {
+                    for (const msg of convos) {
+                        const sender = msg.sender;
+                        if (!state.conversations[sender]) {
+                            state.conversations[sender] = [];
+                            state.aiStatus[sender] = aiStatusMap[sender] !== false;
+                        }
+                        state.conversations[sender].push({ content: msg.incoming_msg, isOutgoing: false });
+                        if (msg.outgoing_msg !== '(Manual Reply Sent)') {
+                            state.conversations[sender].push({ content: msg.outgoing_msg, isOutgoing: true });
+                        }
+                        state.lastMessageDetails[sender] = { phoneid: msg.phoneid };
+                    }
+                }
+                
+                renderPhoneIdDropdown();
+                renderConversationsList();
+            } catch (error) {
+                console.error('Error in fetchInitialData:', error);
+                conversationsListEl.innerHTML = `<p class="p-4 text-red-500 font-semibold">Error loading data: ${error.message}</p>`;
+            }
+        }
+
+
+
+        // event listeners
+        phoneIdDropdown.addEventListener('change', (e) => {
+            state.selectedPhoneId = e.target.value;
+            state.selectedSender = null;
+            chatContentEl.classList.add('hidden');
+            placeholderEl.classList.remove('hidden');
+            renderConversationsList();
+        });
+
+        aiToggleButton.addEventListener('click', async () => {
+            if (!state.selectedSender || !supabaseClient) return;
+            
+            const newAiState = !state.aiStatus[state.selectedSender];
+            
+            try {
+                const { error } = await supabaseClient
+                    .from('ai_status')
+                    .upsert({ phone_number: state.selectedSender, is_active: newAiState }, { onConflict: 'phone_number' });
+
+                if (error) {
+                    console.error("Error updating AI status:", error);
+                    alert("Could not update AI status in the database.");
+                } else {
+                    console.log(`AI status for ${state.selectedSender} set to ${newAiState}`);
+                    state.aiStatus[state.selectedSender] = newAiState;
+                    updateUiForAiState();
+                }
+            } catch (error) {
+                console.error("Error in AI toggle:", error);
+                alert("Could not update AI status in the database.");
+            }
+        });
+
+
+        showConsoleBtn.addEventListener('click', () => {
+            consolePanel.classList.remove('translate-x-full');
+        });
+
+        hideConsoleBtn.addEventListener('click', () => {
+            consolePanel.classList.add('translate-x-full');
+        });
+
+
+
+
+        // real time subscription
+        async function setupRealTimeSubscription() {
+            if (!supabaseClient) return;
+
+            try {
+                console.log('Setting up real-time subscription...');
+                
+                const channel = supabaseClient
+                    .channel('conversations-changes')
+                    .on(
+                        'postgres_changes',
+                        {
+                            event: 'INSERT',
+                            schema: 'public',
+                            table: 'conversations'
+                        },
+                        (payload) => {
+                            console.log('Real-time: New conversation received', payload.new);
+                            const newMessage = payload.new;
+                            const sender = newMessage.sender;
+
+                            if (!state.conversations[sender]) {
+                                state.conversations[sender] = [];
+                                state.aiStatus[sender] = true;
+                            }
+
+                            state.conversations[sender].push({ content: newMessage.incoming_msg, isOutgoing: false });
+                            if (newMessage.outgoing_msg !== '(Manual Reply Sent)') {
+                                state.conversations[sender].push({ content: newMessage.outgoing_msg, isOutgoing: true });
+                            }
+                            
+                            state.lastMessageDetails[sender] = { phoneid: newMessage.phoneid };
+
+                            renderPhoneIdDropdown();
+                            renderConversationsList();
+                            
+                            if (state.selectedSender === sender) {
+                                renderMessages();
+                            }
+                        }
+                    )
+                    .subscribe((status) => {
+                        console.log('Real-time subscription status:', status);
+                    });
+
+                console.log('Real-time subscription set up successfully');
+            } catch (error) {
+                console.error('Error setting up real-time subscription:', error);
+            }
+        }
+
+
+        async function initialize() {
+            setupConsoleInterceptor();
+            await fetchInitialData();
+            await setupRealTimeSubscription();
+        }
+        initialize();
+    </script>
+    </body>
+</html>

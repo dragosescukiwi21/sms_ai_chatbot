@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  sms-bot:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/lateral-imagery-464521-s9-d6633f31a59d.json
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
