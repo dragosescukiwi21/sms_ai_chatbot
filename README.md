@@ -39,6 +39,11 @@ The application uses the following configuration (modify in `sms_bot_script.py`)
 2. Create a `conversations` database in your project containing `sender`, `incoming_msg`, `outgoing_msg` and `phoneid` for text columns. `phoneid` refers to the phone's Android ID from which the messages are being sent.
 2. Create a `ai_status` with `phone_number` (text), `is_active` (bool) for columns. This refers to the `phone_number`'s ability to generate and send AI responses. If the AI response is turned off, the interface will display an empty message blob and the phone will not send any message.
 
+### Automate set-up
+
+1. Download sms_bot.flo and the `Automate` application from the Play Store.
+2. Give all permissions to the app and start the flow. If you wish to loop this process and listen for SMS indefinitely, you may have to connect the `SMS Send` "Ok" parameter to the `SMS Incoming` "In" parameter   
+
 ## Quick Start with Docker
 
 1. Clone this repository
